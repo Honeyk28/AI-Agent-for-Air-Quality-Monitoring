@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AirIndx | 3D Global AQI</title>
+    <!-- Modern Fonts -->
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Outfit:wght@400;600;700;800&display=swap"
+        rel="stylesheet">
+    <!-- WebGL Globe Library -->
+    <script src="https://unpkg.com/globe.gl"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Cache-busting query parameter added -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=5">
+</head>
+
+<body>
+    <!-- Background Gradient -->
+    <div class="space-bg"></div>
+
+    <!-- Interactive 3D Globe Container -->
+    <div id="globeViz"></div>
+
+    <div class="ui-layer">
+        <!-- Top Navigation -->
+        <nav class="top-nav">
+            <div class="nav-links">
+                <a href="#" class="active" onclick="closeAllModals()">Air Quality</a>
+                <a href="#" onclick="openModal('modal-monitors')">Air Monitors</a>
+                <a href="#" onclick="openModal('modal-discover')">Discover</a>
+            </div>
+            <div class="logo">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10" fill="#3b82f6" stroke="none" />
+                    <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"
+                        stroke="white" stroke-width="1.5" />
+                    <path d="M2 12h20" stroke="white" stroke-width="1.5" />
+                </svg>
+                AirIndx
+            </div>
+            <div class="nav-links right-links">
+                <a href="#" onclick="openModal('modal-about')">About</a>
+                <a href="#" onclick="openModal('modal-tech')">Technology</a>
+                <button class="btn-get-started" onclick="openModal('modal-getstarted')">Get Started</button>
+            </div>
+        </nav>
+
+        <!-- Main Content -->
+        <div class="content-layout">
+
+            <!-- Left Panel -->
+            <aside class="left-panel">
+                <div class="header-info">
+                    <h1>Air Quality <span>Index</span></h1>
+                    <p id="time-display" class="datetime">Loading...</p>
+                    <p id="location-display" class="location">Local <span>→</span> <strong id="loc-name">Select a
+                            city</strong></p>
+                </div>
+
+                <!-- Search Form -->
+                <div class="search-box glass" style="position: relative; z-index: 100;">
+                    <div style="display:flex; flex-direction:column; gap:0.5rem;">
+                        <div style="display:flex; gap:0.5rem;">
+                            <input type="text" id="city" placeholder="Search a location..." required autocomplete="off" style="flex-grow:1;">
+                            <select id="api_source" style="width:110px;">
+                                <option value="Open-Meteo">Open-Meteo</option>
+                                <option value="WAQI">WAQI</option>
+                            </select>
+                        </div>
+                        <input type="password" id="api_key" placeholder="WAQI API Token" style="display:none;">
+                        <p id="waqi-attribution" style="display:none; font-size: 0.7rem; color: var(--text-secondary); margin-top: 0.2rem; text-align: center;">Air quality data: World Air Quality Index (WAQI)</p>
+                    </div>
+                    <!-- Search Results Dropdown -->
+                    <div id="search-results" class="glass" style="display:none; position:absolute; top:100%; left:0; width:100%; max-height:200px; overflow-y:auto; z-index:50; margin-top:0.5rem; flex-direction:column; gap:0;">
+                    </div>
+                    <!-- Analyze Button -->
+                    <button id="analyze-btn" class="glass" style="display:none; width:100%; margin-top:0.5rem; padding:0.75rem; background:var(--accent); color:white; border:none; border-radius:12px; font-weight:600; cursor:pointer; font-size:1rem; transition:transform 0.2s;">
+                        ANALYZE AIR QUALITY
+                    </button>
+                </div>
+                <div id="error-message" class="error-msg" style="display:none; margin-top:0.5rem;"></div>
+
+                <!-- Cards -->
+                <div class="cards-container">
+                    <!-- Main Stats Card -->
+                    <div class="card glass main-stats" id="main-stats-panel" style="display: none;">
+                        <h3>Main Statistics</h3>
+                        <p class="label">AQI</p>
+                        <div class="aqi-score" id="aqi-score">--</div>
+                        <div class="dominant-pol">
+                            Dominant Pollutant <span id="dom-pol">--</span>
+                        </div>
+                        <div class="pollutant-grid" id="pollutant-grid">
+                            <!-- Populated by JS -->
+                        </div>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- Right Panel -->
+            <aside class="right-panel">
+                <!-- AI Agent Trace -->
+                <div class="card glass agent-trace-card" id="agent-panel" style="display:none; margin-bottom: 1.5rem;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+                        <h3 style="color: var(--accent); display:flex; align-items:center; gap:0.5rem; font-family:'Outfit', sans-serif; margin-bottom:0;">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <path d="M12 16v-4"></path>
+                                <path d="M12 8h.01"></path>
+                            </svg>
+                            AI AGENT
+                        </h3>
+                    </div>
+                    <div class="agent-status-bar">
+                        <span style="font-size: 0.8rem; color: var(--text-secondary); letter-spacing: 1px;">AIR QUALITY MONITOR</span>
+                        <div style="font-size: 0.9rem; margin-top: 0.25rem;">
+                            Status: <strong id="agent-status-text">IDLE</strong> <span id="agent-spinner" class="spinner" style="display:none;"></span>
+                        </div>
+                    </div>
+                    <div id="agent-steps" class="agent-steps">
+                        <!-- Populated by JS -->
+                    </div>
+
+                    <div id="agent-final-decision" style="display:none; margin-top:1.5rem; padding-top:1rem; border-top:1px solid rgba(255,255,255,0.1);">
+                        <strong style="color:var(--text-primary); font-size:0.85rem; display:block; margin-bottom:0.25rem;">AGENT DECISION</strong>
+                        <p id="agent-decision-text" style="color:var(--accent); font-weight:600; font-size:0.95rem; margin-bottom:0.75rem;">--</p>
+                        
+                        <strong style="color:var(--text-primary); font-size:0.85rem; display:block; margin-bottom:0.25rem;">REASONING</strong>
+                        <p id="agent-explanation-text" style="color:var(--text-secondary); font-size:0.85rem; line-height:1.4;">--</p>
+                    </div>
+                </div>
+
+                <!-- Automated Alert -->
+                <div class="card glass alert-card" id="alert-panel" style="display:none;">
+                    <h3 style="font-family:'Outfit', sans-serif; margin-bottom:1rem;">AUTOMATED ACTION</h3>
+                    <div class="alert-status-grid">
+                        <div>
+                            <span class="alert-label">Alert Status</span>
+                            <div id="alert-status" class="alert-value">--</div>
+                        </div>
+                        <div>
+                            <span class="alert-label">Severity</span>
+                            <div id="alert-severity" class="alert-value">--</div>
+                        </div>
+                    </div>
+                    
+                    <div class="alert-section">
+                        <strong>Reason:</strong>
+                        <p id="alert-reason">--</p>
+                    </div>
+                    
+                    <div class="alert-section">
+                        <strong>Agent Decision:</strong>
+                        <p id="alert-decision">--</p>
+                    </div>
+                    
+                    <div class="alert-section" style="margin-bottom:0;">
+                        <strong>Recommended Action:</strong>
+                        <p id="alert-recommendation">--</p>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- Bottom Info -->
+            <div class="bottom-panel">
+                <div class="bottom-info-container">
+                    <div class="coordinates glass" style="padding: 1rem; border-radius: 12px; min-width: 150px;">
+                        <p>Lat: <span id="coord-lat">--</span></p>
+                        <p>Lon: <span id="coord-lon">--</span></p>
+                    </div>
+
+                    <!-- Chart Card moved to bottom -->
+                    <div class="card glass chart-card" id="chart-panel" style="display: none; height: 120px; width: 400px; padding: 1rem;">
+                        <h3 style="margin-bottom: 0.2rem; font-size: 0.9rem;">24-Hour Trend</h3>
+                        <div style="position: relative; height: 75px; width: 100%;">
+                            <canvas id="historyChart"></canvas>
+                            <div id="chart-fallback" style="display:none; position:absolute; top:0; left:0; width:100%; height:100%; align-items:center; justify-content:center; color:#9ca3af; font-size:0.8rem;">
+                                No data
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="globe-controls glass" style="padding: 1rem; border-radius: 12px; display:flex; gap: 1rem; align-items:center;">
+                        <span class="btn-3d active" style="color: white; border-bottom: 2px solid var(--accent); cursor:pointer;">3D GLOBE</span>
+                        <a href="https://www.iqair.com/earth" target="_blank" class="btn-map" style="text-decoration:none; color: var(--text-secondary);">IQ AIR MAP</a>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- Modals -->
+    <div id="modal-overlay" class="modal-overlay" onclick="closeAllModals()"></div>
+
+    <div id="modal-about" class="custom-modal glass">
+        <button class="close-modal" onclick="closeAllModals()">✕</button>
+        <h2>About AirIndx</h2>
+        <p>AirIndx is an advanced Air Quality Index Prediction system. It uses machine learning models (Random Forest)
+            to analyze real-time meteorological data and predict the AQI for any city worldwide.</p>
+    </div>
+
+    <div id="modal-tech" class="custom-modal glass">
+        <button class="close-modal" onclick="closeAllModals()">✕</button>
+        <h2>Technology Stack</h2>
+        <ul>
+            <li><strong>Frontend:</strong> HTML, Vanilla CSS (Glassmorphism), JavaScript</li>
+            <li><strong>3D Visualization:</strong> WebGL via Globe.gl & Three.js</li>
+            <li><strong>Charts:</strong> Chart.js</li>
+            <li><strong>Backend:</strong> Python, Flask</li>
+            <li><strong>Machine Learning:</strong> Scikit-Learn (Random Forest Regressor)</li>
+        </ul>
+    </div>
+
+    <div id="modal-monitors" class="custom-modal glass">
+        <button class="close-modal" onclick="closeAllModals()">✕</button>
+        <h2>Data Sources & Monitors</h2>
+        <p>The system connects to global air quality networks:</p>
+        <ul>
+            <li><strong>Open-Meteo:</strong> Provides free global weather and air quality APIs.</li>
+            <li><strong>WAQI:</strong> World Air Quality Index project providing real-time data (requires API token).</li>
+        </ul>
+    </div>
+
+    <div id="modal-discover" class="custom-modal glass">
+        <button class="close-modal" onclick="closeAllModals()">✕</button>
+        <h2>Discover Feature</h2>
+        <p>Explore real-time pollution data across the globe. Type any city name in the search bar on the left, and the
+            // Main Stats Panel
+        document.getElementById('main-stats-panel').style.display = 'block';
+
+        // Pollutants
+        document.getElementById('dom-pol').textContent = data.dominant_pollutant.toUpperCase(); and health risks.</p>
+    </div>
+
+    <div id="modal-getstarted" class="custom-modal glass">
+        <button class="close-modal" onclick="closeAllModals()">✕</button>
+        <h2>Get Started</h2>
+        <p>1. Type a city name in the search box.<br>2. Select your data source (Open-Meteo is free).<br>3. Click the
+            arrow button to analyze the air quality!</p>
+    </div>
+
+    <!-- Load JS with cache-busting -->
+    <script src="{{ url_for('static', filename='app.js') }}?v=5"></script>
+</body>
+
+</html>
