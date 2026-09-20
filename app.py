@@ -1,5 +1,6 @@
 from flask import Flask, render_template, request, jsonify
 import requests
+from datetime import datetime
 import pandas as pd
 import numpy as np
 import pickle
@@ -132,6 +133,42 @@ def fetch_open_meteo(city, lat=None, lon=None):
     return {'city': display_name, 'pollutants': pollutants, 'time': current.get('time'), 'history': history, 'lat': lat, 'lon': lon}, None
 
 
+# --- API: FALLBACK ---
+def fetch_fallback(lat, lon, city_name):
+    bounds = f"{lat-2.0},{lon-2.0},{lat+2.0},{lon+2.0}"
+    url = f"https://api.waqi.info/mapq/bounds?bounds={bounds}"
+    try:
+        resp = requests.get(url, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data and len(data) > 0:
+                import math
+                def calc_dist(s_lat, s_lon):
+                    return math.sqrt((s_lat - lat)**2 + (s_lon - lon)**2)
+                
+                closest = min(data, key=lambda s: calc_dist(s.get('lat', 0), s.get('lon', 0)))
+                aqi = closest.get('aqi')
+                try:
+                    aqi = int(aqi)
+                except:
+                    aqi = 0
+                return {
+                    'city': closest.get('city', city_name),
+                    'lat': closest.get('lat', lat),
+                    'lon': closest.get('lon', lon),
+                    'time': datetime.utcnow().strftime('%Y-%m-%dT%H:%M'),
+                    'aqi': aqi,
+                    'dominant_pol': closest.get('pol', 'Unknown'),
+                    'pollutants': {'pm2_5': 0, 'pm10': 0, 'no2': 0, 'so2': 0, 'co': 0, 'o3': 0},
+                    'history': [],
+                    'data_source': 'Fallback Source',
+                    'is_fallback': True
+                }, None
+    except Exception:
+        pass
+    return None, "All data sources, including fallback, are currently unavailable."
+
+
 # --- API: WAQI ---
 def fetch_waqi(lat, lon, city, api_key):
     url = f"https://api.waqi.info/feed/geo:{lat};{lon}/?token={api_key}"
@@ -223,8 +260,13 @@ def predict_api():
 
     fetched_data, err = None, None
     ml_data = None
+    is_fallback = False
+    
     if api_source == "Open-Meteo":
         fetched_data, err = fetch_open_meteo(city, lat, lon)
+        if err:
+            fetched_data, err = fetch_fallback(lat, lon, city)
+            is_fallback = True
         ml_data = fetched_data
     else:
         if not api_key:
@@ -234,49 +276,60 @@ def predict_api():
             if not err:
                 ml_data, ml_err = fetch_open_meteo(city, lat, lon)
                 if ml_err:
-                    err = f"WAQI fetch succeeded, but ML model needs Open-Meteo data which failed: {ml_err}"
+                    ml_data, ml_err2 = fetch_fallback(lat, lon, city)
+                    is_fallback = True
 
     if err:
         return jsonify({"error": err}), 400
 
-    p = fetched_data['pollutants']
-    for k in p:
-        if p[k] is None or p[k] < 0:
-            p[k] = 0
-
-    ml_p = ml_data['pollutants']
-    for k in ml_p:
-        if ml_p[k] is None or ml_p[k] < 0:
-            ml_p[k] = 0
-
+    features_imp_list = []
     warnings_list = []
-    for k, (lo, hi) in TRAIN_RANGES.items():
-        v = ml_p[k]
-        if v > hi * 1.5:
-            warnings_list.append(f"{k.upper()} value ({v:.1f} μg/m³) is far above training range. Prediction may be less reliable.")
+    ci_low, ci_high = 0, 0
 
-    features = pd.DataFrame([{k: ml_p[k] for k in ['pm2_5','pm10','no2','so2','co','o3']}])
+    if is_fallback:
+        predicted_aqi = ml_data['aqi']
+        dominant_pol = ml_data['dominant_pol']
+        dominant_val = predicted_aqi
+        p = ml_data['pollutants']
+        cat, color, impact, prec = get_aqi_info(predicted_aqi)
+    else:
+        p = fetched_data['pollutants']
+        for k in p:
+            if p[k] is None or p[k] < 0:
+                p[k] = 0
 
-    predicted_aqi = model.predict(features)[0]
-    predicted_aqi = max(0, int(round(predicted_aqi)))
+        ml_p = ml_data['pollutants']
+        for k in ml_p:
+            if ml_p[k] is None or ml_p[k] < 0:
+                ml_p[k] = 0
 
-    # CI
-    tree_preds = np.array([tree.predict(features)[0] for tree in model.estimators_])
-    ci_low  = max(0, int(np.percentile(tree_preds, 10)))
-    ci_high = int(np.percentile(tree_preds, 90))
+        for k, (lo, hi) in TRAIN_RANGES.items():
+            v = ml_p[k]
+            if v > hi * 1.5:
+                warnings_list.append(f"{k.upper()} value ({v:.1f} μg/m³) is far above training range. Prediction may be less reliable.")
 
-    cat, color, impact, prec = get_aqi_info(predicted_aqi)
+        features = pd.DataFrame([{k: ml_p[k] for k in ['pm2_5','pm10','no2','so2','co','o3']}])
 
-    # Sub index dominance based on ML inputs
-    sub_idx = compute_sub_indices(ml_p)
-    dominant_pol  = max(sub_idx, key=sub_idx.get)
-    dominant_val  = sub_idx[dominant_pol]
+        predicted_aqi = model.predict(features)[0]
+        predicted_aqi = max(0, int(round(predicted_aqi)))
 
-    # Feature Importance
-    feat_labels = ['PM2.5','PM10','NO₂','SO₂','CO','O₃']
-    importances = model.feature_importances_
-    features_imp_list = [{'feature': label, 'importance': round(float(imp), 3)} for label, imp in zip(feat_labels, importances)]
-    features_imp_list.sort(key=lambda x: x['importance'], reverse=True)
+        # CI
+        tree_preds = np.array([tree.predict(features)[0] for tree in model.estimators_])
+        ci_low  = max(0, int(np.percentile(tree_preds, 10)))
+        ci_high = int(np.percentile(tree_preds, 90))
+
+        cat, color, impact, prec = get_aqi_info(predicted_aqi)
+
+        # Sub index dominance based on ML inputs
+        sub_idx = compute_sub_indices(ml_p)
+        dominant_pol  = max(sub_idx, key=sub_idx.get)
+        dominant_val  = sub_idx[dominant_pol]
+
+        # Feature Importance
+        feat_labels = ['PM2.5','PM10','NO₂','SO₂','CO','O₃']
+        importances = model.feature_importances_
+        features_imp_list = [{'feature': label, 'importance': round(float(imp), 3)} for label, imp in zip(feat_labels, importances)]
+        features_imp_list.sort(key=lambda x: x['importance'], reverse=True)
 
     # Agent Decision Logic
     risk_level = "Low"
@@ -332,6 +385,22 @@ def predict_api():
         alert_severity = "CRITICAL"
         alert_msg = "Critical alert. Avoid all physical activity outdoors."
 
+    data_source_msg = "Open-Meteo temporarily unavailable — fallback data source activated." if is_fallback else "API data sources healthy."
+    ml_msg = "ML prediction unavailable (Fallback active)." if is_fallback else "Random Forest AQI model executed."
+    
+    agent_steps = [
+        {"name": "Location identification", "status": "completed", "message": "Location resolved."},
+        {"name": "Coordinates confirmed", "status": "completed", "message": f"Lat: {lat:.2f}, Lon: {lon:.2f}"},
+        {"name": "Data retrieval", "status": "completed", "message": "Air quality parameters fetched."},
+        {"name": "Data source selected", "status": "completed", "message": data_source_msg},
+        {"name": "Pollutant analysis", "status": "completed", "message": "Individual pollutants assessed."},
+        {"name": "AQI prediction model", "status": "completed", "message": ml_msg},
+        {"name": "AQI category", "status": "completed", "message": "Category classified."},
+        {"name": "Environmental risk", "status": "completed", "message": "Dominant pollutant and health impact determined."},
+        {"name": "Agent decision", "status": "completed", "message": "Reasoning formulated."},
+        {"name": "Automated alert evaluation", "status": "completed", "message": "Alert status determined."}
+    ]
+
     return jsonify({
         "city": fetched_data['city'],
         "time": fetched_data['time'],
@@ -347,20 +416,14 @@ def predict_api():
         "pollutants": p,
         "warnings": warnings_list,
         "feature_importances": features_imp_list,
-        "history": fetched_data['history'],
+        "history": fetched_data.get('history', []),
         "lat": fetched_data.get('lat', lat),
         "lon": fetched_data.get('lon', lon),
+        "data_source": fetched_data.get('data_source', 'Open-Meteo'),
         
         "agent": {
             "status": "completed",
-            "steps": [
-                {"name": "Location Identification", "status": "completed", "message": "Location and coordinates resolved."},
-                {"name": "Data Retrieval", "status": "completed", "message": "Air quality parameters fetched."},
-                {"name": "Pollutant Analysis", "status": "completed", "message": "Individual pollutants assessed."},
-                {"name": "ML Prediction", "status": "completed", "message": "Random Forest AQI model executed."},
-                {"name": "Risk Evaluation", "status": "completed", "message": "Dominant pollutant and health impact determined."},
-                {"name": "Agent Decision", "status": "completed", "message": "Automated alert evaluated."}
-            ]
+            "steps": agent_steps
         },
         "location": {
             "name": fetched_data['city'],

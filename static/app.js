@@ -292,6 +292,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Location & Time
         document.getElementById('loc-name').textContent = data.city;
+        if(document.getElementById('data-source-display')){
+            document.getElementById('data-source-display').textContent = data.data_source || 'Open-Meteo';
+            if (data.data_source && data.data_source.includes('Fallback')) {
+                document.getElementById('data-source-display').style.color = '#ef4444';
+            } else {
+                document.getElementById('data-source-display').style.color = 'var(--accent)';
+            }
+        }
         
         // AQI Score
         document.getElementById('aqi-score').textContent = data.aqi;
