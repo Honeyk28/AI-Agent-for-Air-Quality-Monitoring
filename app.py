@@ -85,7 +85,7 @@ def fetch_open_meteo(city, lat=None, lon=None):
         f"?latitude={lat}&longitude={lon}"
         f"&current=pm10,pm2_5,carbon_monoxide,nitrogen_dioxide,sulphur_dioxide,ozone"
         f"&hourly=pm10,pm2_5,carbon_monoxide,nitrogen_dioxide,sulphur_dioxide,ozone"
-        f"&past_days=1"
+        f"&forecast_hours=24"
     )
     try:
         aq_resp = requests.get(aq_url, timeout=10)
@@ -93,6 +93,11 @@ def fetch_open_meteo(city, lat=None, lon=None):
         return None, f"Network error (air quality): {e}"
 
     if aq_resp.status_code != 200:
+        if aq_resp.status_code == 429:
+            return None, (
+                "Open-Meteo is temporarily rate-limiting requests (HTTP 429). "
+                "Please wait a moment and try again."
+            )
         return None, f"Open-Meteo AQ API error: {aq_resp.status_code}"
 
     json_data = aq_resp.json()
